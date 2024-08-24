@@ -1,18 +1,21 @@
 # -*- coding: utf-8 -*-
 from datasets import load_dataset
+from sklearn import metrics
 from transformers import (
     AutoTokenizer,
     DataCollatorForTokenClassification,
-    AutoModelForTokenClassification,
-    TrainingArguments,
-    Trainer,
+    TFAutoModelForTokenClassification,
+    PushToHubCallback,
+    create_optimizer,
     pipeline
 )
-# from huggingface_hub import login()
+from datasets import load_dataset
 import evaluate
 import numpy as np
-from torch.utils.data import DataLoader
-
+import tensorflow as tf
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 class TokenClassifier():
     def __init__(self):
@@ -23,7 +26,10 @@ class TokenClassifier():
         self.tokenizer = None
         self.raw_datasets = None
         self.model_checkpoint = None
-        self.args = None
+        self.tf_train_dataset = None
+        self.tf_val_dataset = None
+        self.optimizer = None
+        pass
 
     def load_dataset(self):
         self.raw_datasets = load_dataset("eriktks/conll2003", revision="refs/convert/parquet")
@@ -32,18 +38,17 @@ class TokenClassifier():
     def load_model(self):
         self.model_checkpoint = "bert-base-cased"
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_checkpoint)
-        self.data_collator = DataCollatorForTokenClassification(tokenizer=self.tokenizer)
+        self.data_collator = DataCollatorForTokenClassification(tokenizer=self.tokenizer, return_tensors="tf")
         self.metric = evaluate.load("seqeval")
-        
-
+    
     def create_model(self, id2label, label2id):
         print("Start creating model")
-        self.model = AutoModelForTokenClassification.from_pretrained(
+        self.model = TFAutoModelForTokenClassification.from_pretrained(
             self.model_checkpoint,
             id2label=id2label,
-            label2id=label2id,
+            label2id=label2id
         )
-        print("Number of labels in NER: ",self.model.config.num_labels)
+        print("Number of labels in NER: ", self.model.config.num_labels)
 
     def convert_id_label(self):
         id2label = {i: label for i, label in enumerate(self.labelName)}
@@ -56,7 +61,7 @@ class TokenClassifier():
     def get_labelName_items(self, set="train", featureName="ner_tags"):
         self.labelName = self.raw_datasets[set].features[featureName].feature.names
         return self.labelName
-    
+
     def get_pair_items(self, set="train", index=0, feature1="tokens", feature2="ner_tags"):
         feature1 = self.get_feature_items(set, index, feature1)
         feature2 = self.get_feature_items(set, index, feature2)
@@ -69,12 +74,12 @@ class TokenClassifier():
             line2 += str(full_label) + str(" " * (max_length - len(full_label) + 1))
 
         return line1, line2
-
-    def get_tokenizer(self, set="train",index=0, feature="tokens", is_split_into_words=True):
+    
+    def get_tokenizer(self, set="train", index=0, feature="tokens", is_split_into_words=True):
         print("Fast Token: ", self.tokenizer.is_fast)
         inputs = self.tokenizer(self.get_feature_items(set, index, feature), is_split_into_words=is_split_into_words)
         return inputs.tokens(), inputs.word_ids()
-    
+
     def align_labels_with_tokens(self, labels, word_ids):
         new_labels = []
         current_word = None
@@ -96,8 +101,9 @@ class TokenClassifier():
                 new_labels.append(label)
 
         return new_labels
-    
-    def tokenize_and_align_labels(self, examples, feature1="tokens", feature2="ner_tags"):
+
+
+    def tokenize_and_align_labels(self, examples,  feature1="tokens", feature2="ner_tags"):
         tokenized_inputs = self.tokenizer(
             examples[feature1], truncation=True, is_split_into_words=True
         )
@@ -109,7 +115,7 @@ class TokenClassifier():
 
         tokenized_inputs["labels"] = new_labels
         return tokenized_inputs
-    
+
     def map_tokenize_dataset(self, set="train"):
         print("Start of processing dataset")
         self.tokenized_dataset = self.raw_datasets.map(
@@ -119,74 +125,75 @@ class TokenClassifier():
         )
         print("Done mapping")
 
+    def dataset_loader_tf(self):
+        print("Convert dataset to TF type")
+        self.tf_train_dataset = self.tokenized_dataset["train"].to_tf_dataset(
+            columns=["attention_mask", "input_ids", "token_type_ids","labels"],
+            #label_cols=["labels"],
+            collate_fn=self.data_collator,
+            shuffle=True,
+            batch_size=8,
+        )
+
+        self.tf_val_dataset = self.tokenized_dataset["validation"].to_tf_dataset(
+            columns=["attention_mask", "input_ids","token_type_ids","labels"],
+            #label_cols=["labels"],
+            collate_fn=self.data_collator,
+            shuffle=False,
+            batch_size=8,
+        )
+        print("Done converting TF")
+    
     def compute_metrics(self, eval_prediction):
-        logits, labels = eval_prediction
-        predictions = np.argmax(logits, axis=-1)
+        all_predictions = []
+        all_labels = []
+        for batch in eval_prediction:
+            logits = self.model.predict(batch)["logits"]
+            labels = batch["labels"]
+            predictions = np.argmax(logits, axis=-1)
+            for prediction, label in zip(predictions, labels):
+                for predicted_idx, label_idx in zip(prediction, label):
+                    if label_idx == -100:
+                        continue
+                    all_predictions.append(self.labelName[predicted_idx])
+                    all_labels.append(self.labelName[label_idx])
 
-        # Remove special token and convert to labels
-        true_labels = [[self.labelName[l] for l in label if l != -100] for label in labels]
-        true_predictions = [
-            [self.labelName[p] for (p, l) in zip(prediction, label) if l != -100]
-            for prediction, label in zip(predictions, labels)
-        ]
-        all_metrics = self.metric.compute(predictions=true_predictions, references=true_labels)
-        return {
-            "precision": all_metrics["overall_precision"],
-            "recall": all_metrics["overall_recall"],
-            "f1": all_metrics["overall_f1"],
-            "accuracy": all_metrics["overall_accuracy"],
-        }
+        self.metric.compute(predictions=[all_predictions], references=[all_labels])
 
-
-    def create_argumentTrainer(self, output_dir="fine-tuned-model", eval_strategy="epoch", logging_strategy="epoch",
-                               save_strategy="epoch", learning_rate=2e-5,num_train_epochs=1, weight_decay=0.01, 
-                               batch_size=8, push_to_hub=False, hub_model_id=""):
-        self.args = TrainingArguments(
-            use_cpu=True,
-            output_dir=output_dir,
-            eval_strategy=eval_strategy,
-            save_strategy=save_strategy,
-            logging_strategy=logging_strategy,
-            num_train_epochs=num_train_epochs,
-            learning_rate=learning_rate,
-            weight_decay=weight_decay,
-            #warmup_steps=0,
-            #max_steps=num_training_steps,
-            push_to_hub=push_to_hub,
-            hub_model_id=hub_model_id,
-            per_device_train_batch_size=batch_size,
-            per_device_eval_batch_size=batch_size
+    def create_hyperparameter(self, learning_rate=2e-5,num_train_epochs=1, weight_decay=0.01):
+        #tf.keras.mixed_precision.set_global_policy("mixed_float16")
+        num_train_steps = len(self.tf_train_dataset) * num_train_epochs
+        self.optimizer, _= create_optimizer(
+            init_lr=learning_rate,
+            num_warmup_steps=0,
+            num_train_steps=num_train_steps,
+            weight_decay_rate=weight_decay,
         )
-        
-        print("Arguments ready for training")
-        return self.args
+        print("Optimizer ready for training")
+        return self.optimizer
 
-    def call_train(self, model_path="pretrained-model",set_train="train", set_val="validation", push_to_hub=False, save_local=False):
-        trainer = Trainer(
-            model=self.model,
-            args=self.args,
-            train_dataset=self.tokenized_dataset[set_train],
-            eval_dataset=self.tokenized_dataset[set_val],
-            data_collator=self.data_collator,
-            compute_metrics=self.compute_metrics,
-            tokenizer=self.tokenizer,
-            
-        )
-        trainer.train()
-        print("Done training")
-        if save_local:
-            trainer.save_model(model_path)
-            print("Done saving to local")
-            # trainer.model.save_pretrained("model_pretrained")
+    def call_train(self, num_train_epochs=1, output_dir="fine_tuned_model", save_strategy="epoch",push_to_hub=False,
+                    save_local=False, hub_model_id="Chessmen/test"):
         if push_to_hub:
-            trainer.push_to_hub(commit_message="Training complete")
-            print("Done pushing push to hub")
-
-    def call_pipeline(self, local=False, path="fine_tuned_model", example=""):
-        if local:
-            model_checkpoint = "token_classify"
+            callback = PushToHubCallback(output_dir=output_dir, save_strategy=save_strategy,
+                                         tokenizer=self.tokenizer, hub_model_id=hub_model_id, checkpoint=True)
         else:
-            model_checkpoint = path
+            callback = None
+        self.model.compile(optimizer=self.optimizer)
+        self.model.fit(
+            self.tf_train_dataset,
+            validation_data=self.tf_val_dataset,
+            callbacks=[callback],
+            epochs=num_train_epochs,
+        )
+        print("Done training")
+        print("Done pushing push to hub")
+
+    def call_pipeline(self, local=True, path_url="fine_tuned_model", example=""):
+        if local:
+            model_checkpoint = path_url
+        else:
+            model_checkpoint = "token_classify"
             
         token_classifier = pipeline(
             "token-classification",
@@ -195,8 +202,7 @@ class TokenClassifier():
         )
         print(token_classifier(example))
 
-
-if __name__ == "__main__":
+if __name__=="__main__":
     '''
         1_LOADING DATASET
     '''
@@ -222,27 +228,21 @@ if __name__ == "__main__":
     print("Tokens List of Example 0: ",tokens)
     print("Word IDs List of Example 0: ",word_ids)
     ner.map_tokenize_dataset(set="train")
-    #print("(ner_tags) in dataset: ",ner.get_feature_items(set="train", index=0, feature="ner_tags"))
+    # print("(ner_tags) in dataset: ",ner.get_feature_items(set="train", index=0, feature="ner_tags"))
     # batch = ner.data_collator([ner.tokenized_dataset["train"][i] for i in range(2)])
     # print(batch["labels"])
+    ner.dataset_loader_tf()
     '''
         4_INITIALIZATION MODEL
     '''
     ner.create_model(id2label, label2id)
-    # labels = ner.raw_datasets["train"][0]["ner_tags"]
-    # labels = [ner.labelName[i] for i in labels]
-    # labels
-
-    # predictions = labels.copy()
-    # print(predictions)
-    
-    # print(ner.metric.compute(predictions=[predictions], references=[labels]))
     '''
         5_SELECTION HYPERPARAMETERS
     '''
-    ner.create_argumentTrainer(batch_size=16, push_to_hub=False, hub_model_id="Chessmen/test")
-    ner.call_train(push_to_hub=False)
+    ner.create_hyperparameter()
+    ner.call_train(save_local=True ,push_to_hub=True)
+    print(ner.compute_metrics(ner.tf_val_dataset))
     '''
         6_USE PRE-TRAINED MODEL
     '''
-    #ner.call_pipeline(example="My name is Sylvain and I work at Hugging Face in Brooklyn.")
+    ner.call_pipeline(example="My name is Sylvain and I work at Hugging Face in Brooklyn.")
