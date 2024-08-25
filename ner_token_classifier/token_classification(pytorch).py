@@ -8,7 +8,6 @@ from transformers import (
     Trainer,
     pipeline
 )
-# from huggingface_hub import login()
 import evaluate
 import numpy as np
 from torch.utils.data import DataLoader
