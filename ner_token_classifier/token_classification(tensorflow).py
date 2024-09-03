@@ -14,6 +14,7 @@ import evaluate
 import numpy as np
 import tensorflow as tf
 import os
+
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -161,7 +162,7 @@ class TokenClassifier():
         self.metric.compute(predictions=[all_predictions], references=[all_labels])
 
     def create_hyperparameter(self, learning_rate=2e-5,num_train_epochs=1, weight_decay=0.01):
-        #tf.keras.mixed_precision.set_global_policy("mixed_float16")
+        tf.keras.mixed_precision.set_global_policy("mixed_float16")
         num_train_steps = len(self.tf_train_dataset) * num_train_epochs
         self.optimizer, _= create_optimizer(
             init_lr=learning_rate,
@@ -172,10 +173,10 @@ class TokenClassifier():
         print("Optimizer ready for training")
         return self.optimizer
 
-    def call_train(self, num_train_epochs=1, output_dir="fine_tuned_model", save_strategy="epoch",push_to_hub=False,
-                    save_local=False, hub_model_id="Chessmen/test"):
+    def call_train(self, num_train_epochs=20, output_dir="TF_fine_tuned_", save_strategy="epoch",push_to_hub=False,
+                    save_local=False, hub_model_id=""):
         if push_to_hub:
-            callback = PushToHubCallback(output_dir=output_dir, save_strategy=save_strategy,
+            callback = PushToHubCallback(output_dir=output_dir+self.model_checkpoint, save_strategy=save_strategy,
                                          tokenizer=self.tokenizer, hub_model_id=hub_model_id, checkpoint=True)
         else:
             callback = None
@@ -189,9 +190,9 @@ class TokenClassifier():
         print("Done training")
         print("Done pushing push to hub")
 
-    def call_pipeline(self, local=True, path_url="fine_tuned_model", example=""):
+    def call_pipeline(self, local=False, path="", example=""):
         if local:
-            model_checkpoint = path_url
+            model_checkpoint = path
         else:
             model_checkpoint = "token_classify"
             
@@ -240,9 +241,9 @@ if __name__=="__main__":
         5_SELECTION HYPERPARAMETERS
     '''
     ner.create_hyperparameter()
-    ner.call_train(save_local=True ,push_to_hub=True)
+    ner.call_train(save_local=True ,push_to_hub=True, hub_model_id="Chessmen/TF_fine_tune_" + ner.model_checkpoint)
     print(ner.compute_metrics(ner.tf_val_dataset))
     '''
         6_USE PRE-TRAINED MODEL
     '''
-    ner.call_pipeline(example="My name is Sylvain and I work at Hugging Face in Brooklyn.")
+    ner.call_pipeline(path="Chessmen/TF_fine_tune_bert-base-cased",example="My name is Sylvain and I work at Hugging Face in Brooklyn.")
