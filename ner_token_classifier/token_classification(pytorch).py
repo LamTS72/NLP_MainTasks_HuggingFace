@@ -13,13 +13,11 @@ import evaluate
 import numpy as np
 from torch.utils.data import DataLoader
 from configparser import ConfigParser
-import torch
+
 # config_object = ConfigParser()
 # config_object.read("./config.ini")
 # user = config_object["HUGGINGFACE"]
 # print(user["key"])
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(device)
 
 class TokenClassifier():
     def __init__(self):
@@ -148,7 +146,7 @@ class TokenClassifier():
                                save_strategy="epoch", learning_rate=2e-5,num_train_epochs=20, weight_decay=0.01, 
                                batch_size=8, push_to_hub=False, hub_model_id=""):
         self.args = TrainingArguments(
-            #use_cpu=True,
+            use_cpu=True,
             output_dir=output_dir+self.model_checkpoint,
             eval_strategy=eval_strategy,
             save_strategy=save_strategy,
@@ -188,7 +186,7 @@ class TokenClassifier():
             trainer.push_to_hub(commit_message="Training complete")
             print("Done pushing push to hub")
 
-    def call_pipeline(self, local=False, path="", example=""):
+    def call_pipeline(self, local=False, path="fine_tuned_model", example=""):
         if local:
             model_checkpoint = "token_classify"
         else:
@@ -203,52 +201,49 @@ class TokenClassifier():
 
 
 if __name__ == "__main__":
-    '''
-        1_LOADING DATASET
-    '''
-    ner = TokenClassifier()
-    # ner.load_dataset()
-    # ner.load_support()
-    # '''
-    #     2_EXPLORING DATASET, MODEL
-    # '''
-    # print("Example 0(tokens) in dataset: ",ner.get_feature_items(set="train", index=0, feature="tokens"))
-    # print("Example 0(ner_tags) in dataset: ",ner.get_feature_items(set="train", index=0, feature="ner_tags"))
-    # '''
-    #     3_PRE-PROCESSING DATASET, COMPUTE METRICS
-    # '''
-    # print("List labels name in NER: ",ner.get_labelName_items(set="train", featureName="ner_tags"))
-    # id2label, label2id = ner.convert_id_label()
-    # print("Dict of IDs into labels: ", id2label)
-    # print("Pair of Example 0")
-    # line1, line2 = ner.get_pair_items(set="train", index=0, feature1="tokens", feature2="ner_tags")
-    # print("--> Inp of Example 0: ", line1)
-    # print("--> Out of Example 0: ", line2)
-    # tokens, word_ids= ner.get_tokenizer(set="train", index=0, feature="tokens", is_split_into_words=True)
-    # print("Tokens List of Example 0: ",tokens)
-    # print("Word IDs List of Example 0: ",word_ids)
-    # ner.map_tokenize_dataset(set="train")
-    # #print("(ner_tags) in dataset: ",ner.get_feature_items(set="train", index=0, feature="ner_tags"))
-    # # batch = ner.data_collator([ner.tokenized_dataset["train"][i] for i in range(2)])
-    # # print(batch["labels"])
-    # '''
-    #     4_INITIALIZATION MODEL
-    # '''
-    # ner.create_model(id2label, label2id)
-    # # labels = ner.raw_datasets["train"][0]["ner_tags"]
-    # # labels = [ner.labelName[i] for i in labels]
-    # # labels
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    1_LOADING DATASET
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
-    # # predictions = labels.copy()
-    # # print(predictions)
+    ner = TokenClassifier()
+    ner.load_dataset()
+
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    2_EXPLORING DATASET, 
+      _CREATING MODEL
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+    print("Example 0(tokens) in dataset: ",ner.get_feature_items(set="train", index=0, feature="tokens"))
+    print("Example 0(ner_tags) in dataset: ",ner.get_feature_items(set="train", index=0, feature="ner_tags"))
+    print("List labels name in NER: ",ner.get_labelName_items(set="train", featureName="ner_tags"))
+    id2label, label2id = ner.convert_id_label()
+    ner.load_support()
+    ner.create_model(id2label, label2id)
+  
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    3_PRE-PROCESSING DATASET, 
+      _COMPUTE METRICS
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+    print("Dict of IDs into labels: ", id2label)
+    print("Pair of Example 0")
+    line1, line2 = ner.get_pair_items(set="train", index=0, feature1="tokens", feature2="ner_tags")
+    print("--> Inp of Example 0: ", line1)
+    print("--> Out of Example 0: ", line2)
+    tokens, word_ids= ner.get_tokenizer(set="train", index=0, feature="tokens", is_split_into_words=True)
+    print("Tokens List of Example 0: ",tokens)
+    print("Word IDs List of Example 0: ",word_ids)
+    ner.map_tokenize_dataset(set="train")
+
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    4_SELECTION HYPERPARMETERS
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+    ner.create_argumentTrainer(batch_size=16, push_to_hub=True, hub_model_id="Chessmen/"+"fine_tune_" + ner.model_checkpoint)
+    ner.call_train(push_to_hub=True)
+
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+        5_USE PRE-TRAINED MODEL
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
     
-    # # print(ner.metric.compute(predictions=[predictions], references=[labels]))
-    # '''
-    #     5_SELECTION HYPERPARAMETERS
-    # '''
-    # ner.create_argumentTrainer(batch_size=64, push_to_hub=True, hub_model_id="Chessmen/"+"fine_tune_" + ner.model_checkpoint)
-    # ner.call_train(push_to_hub=True)
-    '''
-        6_USE PRE-TRAINED MODEL
-    '''
-    ner.call_pipeline(path="Chessmen/fine_tune_bert-base-cased",example="My name is Sylvain and I work at Hugging Face in Brooklyn.")
+    ner.call_pipeline(example="My name is Sylvain and I work at Hugging Face in Brooklyn.")
