@@ -111,7 +111,7 @@ class Translation(object):
         decoded_labels = [label.strip() for label in decoded_labels]
 
         result = self.metric.compute(predictions=decoded_logits, labels=decoded_labels)
-        return {"bleu": result["score"]}
+        return {"bleu": result}
     
     def create_argumentTrainer(self, output_dir="fine_tuned_", eval_strategy="no", logging_strategy="epoch",
                                learning_rate=2e-5, num_train_epochs=20, weight_decay=0.01, batch_size=64,
