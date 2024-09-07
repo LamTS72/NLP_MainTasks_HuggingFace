@@ -1,3 +1,4 @@
+from charset_normalizer import from_fp
 from datasets import load_dataset, concatenate_datasets, DatasetDict
 from transformers import(
     AutoTokenizer,
@@ -11,7 +12,7 @@ import torch
 import evaluate
 import numpy as np
 import nltk
-nltk.download("punkt")
+nltk.download("punkt_tab")
 from nltk.tokenize import sent_tokenize
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -46,6 +47,7 @@ class Summarization(object):
         self.other_name = self.model_checkpoint.split("/")[-1]
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_checkpoint)
         print("Name of model checkpoint: ", self.model_checkpoint)
+        print("Other name: ", self.other_name)
         print("Tokenizer Fast: ", self.tokenizer.is_fast)
         print("Model max length tokenizer: ", self.tokenizer.model_max_length)
 
@@ -131,6 +133,8 @@ class Summarization(object):
 
     def compute_metrics(self, eval_prediction):
         predictions, labels = eval_prediction
+        if isinstance(predictions, tuple):
+            predictions = predictions[0]
         '''Decode LOGIT of prediction to TEXT'''
         decoded_predictions = self.tokenizer.batch_decode(predictions, skip_special_tokens=True)
 
@@ -142,24 +146,26 @@ class Summarization(object):
         decoded_predictions = ["\n".join(sent_tokenize(prediction.strip())) for prediction in decoded_predictions]
         decoded_labels = ["\n".join(sent_tokenize(label.strip())) for label in decoded_labels]            
 
-        result = self.metric.compute(predictions=decoded_predictions, labels=decoded_labels)
+        result = self.metric.compute(predictions=decoded_predictions, references=decoded_labels, use_stemmer=True)
         result = {key: value * 100 for key, value in result.items()}
         return {k: round(v, 4) for k, v in result.items()}
 
     def create_argumentTrainer(self, output_dir="fine_tuned_", eval_strategy="no", logging_strategy="epoch",
-                                            learning_rate=2e-5, num_train_epochs=20, weight_decay=0.01, batch_size=64,
+                                            learning_rate=5.6e-5, num_train_epochs=20, weight_decay=0.01, batch_size=64,
                                             save_strategy="epoch", push_to_hub=False, hub_model_id="", fp16=True, 
                                             save_total_limit=3, predict_with_generate=True):
+        
+        '''Some special cases of model as T5, fp16 need False'''
         self.args = Seq2SeqTrainingArguments(
-            use_cpu=True,
+            #use_cpu=True,
             output_dir=output_dir+self.other_name,
             eval_strategy=eval_strategy,
-            save_strategy=save_strategy,
+            #save_strategy=save_strategy,
             logging_strategy=logging_strategy,
             num_train_epochs=num_train_epochs,
             learning_rate=learning_rate,
             weight_decay=weight_decay,
-            fp16=fp16,
+            #fp16=fp16, 
             save_total_limit=save_total_limit,
             predict_with_generate=predict_with_generate,
             push_to_hub=push_to_hub,
@@ -180,13 +186,11 @@ class Summarization(object):
             tokenizer=self.tokenizer,
             compute_metrics=self.compute_metrics,
         )
-        print("Basis evaluation before of training: ", trainer.evaluate())
+        #print("Basis evaluation before of training: ", trainer.evaluate())
 
         print("Start training")
         trainer.train()
         print("Done training")
-
-        print("Basis evaluation after of training: ", trainer.evaluate())
 
         if save_local:
             trainer.save_model(model_path+self.model_checkpoint)
@@ -196,6 +200,9 @@ class Summarization(object):
             trainer.push_to_hub(commit_message="Training complete")
             print("Done pushing push to hub")       
 
+        print("Basis evaluation after of training: ")
+        print(trainer.evaluate())
+
     def call_pipeline(self, local=False, path="", example=""):
         if local:
             model_checkpoint = ""
@@ -204,27 +211,26 @@ class Summarization(object):
         summary = pipeline(
             "summarization",
             model=model_checkpoint,
+            token="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"
         )
         print("Summary: ",summary(example)[0]["summary_text"])
     
     def test(self, index):
-        review = self.tokenized_dataset["test"][index]["review_body"]
-        title = self.tokenized_dataset["test"][index]["review_title"]
+        review = self.collection_dataset["test"][index]["review_body"]
+        title = self.collection_dataset["test"][index]["review_title"]
         print(f"'>>> Review: {review}'")
         print(f"\n'>>> Title: {title}'")
         self.call_pipeline(path="Chessmen/fine_tuned_"+ self.other_name, example= review)
-
-
 
 if __name__ == "__main__":
     '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
     1_LOADING DATASET
     '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
-    print("-"*50, "Exploring information of Supporting", "-"*50)
+    print("-"*50, "Exploring information of Dataset", "-"*50)
     summary = Summarization()
     summary.load_dataset()
-    print("-"*50, "Exploring information of Supporting", "-"*50)
+    print("-"*50, "Exploring information of Dataset", "-"*50)
 
     '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
     2_EXPLORING DATASET, 
@@ -267,13 +273,12 @@ if __name__ == "__main__":
     4_SELECTION HYPERPARMETERS
     '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
-    summary.create_argumentTrainer(num_train_epochs=10, push_to_hub=True, hub_model_id="Chessmen/"+"fine_tune_" + summary.other_name)
+    summary.create_argumentTrainer(batch_size=32, num_train_epochs=10, push_to_hub=True, hub_model_id="Chessmen/"+"fine_tune_" + summary.other_name)
     summary.call_train(save_local=True,push_to_hub=True)
-    
 
     '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         5_USE PRE-TRAINED MODEL
     '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
-    summary.call_pipeline(path="Chessmen/fine_tuned_"+ summary.other_name, example= "Muy apropiado para mis hijas")
-    summary.test(index=300)
+    summary.call_pipeline(path="Chessmen/fine_tune_mt5-small", example= "Muy apropiado para mis hijas")
+    summary.test(index=100)
