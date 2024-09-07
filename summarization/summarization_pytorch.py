@@ -211,7 +211,6 @@ class Summarization(object):
         summary = pipeline(
             "summarization",
             model=model_checkpoint,
-            token="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"
         )
         print("Summary: ",summary(example)[0]["summary_text"])
     
