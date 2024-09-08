@@ -1,0 +1,41 @@
+{
+  "builder_name": "json",
+  "citation": "",
+  "config_name": "default",
+  "dataset_name": "codeparrot-ds-valid",
+  "dataset_size": 44240123,
+  "description": "",
+  "download_checksums": {
+    "hf://datasets/huggingface-course/codeparrot-ds-valid@bc5778ac60e5f6e1efdaa6b90bad4e62f83eff13/codeparrot-ds-valid.jsonl": {
+      "num_bytes": 46094887,
+      "checksum": null
+    }
+  },
+  "download_size": 46094887,
+  "features": {
+    "input_ids": {
+      "feature": {
+        "dtype": "int32",
+        "_type": "Value"
+      },
+      "_type": "Sequence"
+    }
+  },
+  "homepage": "",
+  "license": "",
+  "size_in_bytes": 90335010,
+  "splits": {
+    "validation": {
+      "name": "validation",
+      "num_bytes": 44240123,
+      "num_examples": 3322,
+      "dataset_name": "codeparrot-ds-valid"
+    }
+  },
+  "version": {
+    "version_str": "0.0.0",
+    "major": 0,
+    "minor": 0,
+    "patch": 0
+  }
+}
