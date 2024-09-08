@@ -1,3 +1,4 @@
 *.safetensors
 *.pt
 *.h5
+*.arrow
